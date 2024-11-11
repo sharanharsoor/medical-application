@@ -1,24 +1,22 @@
 services:
-  # Backend API Service
   - type: web
     name: medical-research-api
-    env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn src.api.main:app --host 0.0.0.0 --port $PORT
+    runtime: python3.9
+    buildCommand: cd backend && pip install -r requirements.txt
+    startCommand: cd backend && uvicorn src.api.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: GEMINI_API_KEY
-        sync: false  # Means you'll set this manually in Render dashboard
+        sync: false
       - key: PUBMED_API_KEY
         sync: false
       - key: MONGODB_URI
         sync: false
 
-  # Frontend Static Site
   - type: web
     name: medical-research-ui
-    env: static
-    buildCommand: npm install && npm run build
-    staticPublishPath: ./build
+    runtime: static
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: ./frontend/build
     envVars:
       - key: REACT_APP_API_URL
-        value: https://medical-research-api.onrender.com  # Will be your backend URL
+        value: https://medical-research-api.onrender.com
