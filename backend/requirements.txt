@@ -11,4 +11,3 @@ langchain-google-genai==2.0.4
 apscheduler==3.10.1
 python-multipart==0.0.6
 requests==2.31.0
-bson==0.5.10
