@@ -15,11 +15,12 @@ services:
         sync: false
 
   # Frontend Static Site
-  - type: static
+  - type: web
     name: medical-research-ui
+    runtime: static
     rootDirectory: frontend
     buildCommand: npm install && npm run build
-    publishDirectory: build
+    staticPublishPath: build
     envVars:
       - key: REACT_APP_API_URL
         value: https://medical-research-api.onrender.com
