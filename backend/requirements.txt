@@ -1,13 +1,33 @@
-fastapi==0.109.2
-uvicorn==0.27.1
-python-dotenv==1.0.0
-pymongo==4.6.1
-certifi==2024.2.2
-google-generativeai==0.8.3
+# Core dependencies
+requests==2.32.3
 langchain==0.3.4
 langchain-core==0.3.15
 langchain-google-genai==2.0.4
-apscheduler==3.10.1
+google-generativeai==0.8.3
+
+# Data processing and analysis
+pandas==2.2.2
+numpy==1.26.4
+
+# Text processing
+spacy==3.7.5
+sentence-transformers==3.2.1
+
+# Utilities
+python-dateutil==2.8.2
+pytz==2024.2
+tqdm==4.66.6
+typing_extensions==4.12.2
+
+# Optional but recommended for better formatting
+tabulate==0.9.0
+python-dotenv==1.0.0
+schedule
+pymongo
+
+fastapi==0.109.2
+uvicorn==0.27.1
 python-multipart==0.0.6
-pydantic==2.5.3
-requests==2.31.0
+bson==0.5.10
+apscheduler==3.10.1
+
