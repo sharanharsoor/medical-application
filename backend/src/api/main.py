@@ -424,3 +424,20 @@ async def check_initial_update():
             status_code=500,
             detail=f"Error checking initial update: {str(e)}"
         )
+
+@app.middleware("http")
+async def handle_exceptions(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as e:
+        logger.error(f"Global error: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error. Service is starting up, please try again in a few moments."}
+        )
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+

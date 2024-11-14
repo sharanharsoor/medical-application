@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Tab, Tabs, Container, Card, Button, Spinner, Form, Badge, ListGroup, Alert } from 'react-bootstrap';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import config from './config';
 
 const API_BASE_URL = config.apiUrl;
+const PING_INTERVAL = 4 * 60 * 1000; // 4 minutes
 
 const styles = {
   container: {
@@ -63,135 +64,185 @@ function App() {
   const [error, setError] = useState(null);
   const [schedulerStatus, setSchedulerStatus] = useState(null);
   const [nextUpdate, setNextUpdate] = useState(null);
+  const [isInitializing, setIsInitializing] = useState(true);
 
-  useEffect(() => {
-    fetchInitialStatus();
-    fetchLatestAnalyses();
-    fetchAvailableDates();
-    fetchStats();
-    fetchSchedulerStatus();
+  // Refs for cleanup
+  const abortControllerRef = useRef(null);
+  const statusIntervalRef = useRef(null);
+  const retryTimeoutRef = useRef(null);
+  const pingIntervalRef = useRef(null);
 
-    const statusInterval = setInterval(fetchSchedulerStatus, 60000);
-    return () => clearInterval(statusInterval);
-  }, []);
-
-  const fetchInitialStatus = async () => {
+  // Keep-alive ping function
+  const pingServer = useCallback(async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/scheduler/initial-check`);
-      const data = await response.json();
-      if (response.ok) {
-        setNextUpdate(data.message);
+      const response = await fetch(`${API_BASE_URL}/health`);
+      if (!response.ok) {
+        console.warn('Keep-alive ping failed, status:', response.status);
       }
     } catch (err) {
-      console.error('Error fetching initial status:', err);
+      console.warn('Keep-alive ping failed:', err);
     }
-  };
+  }, []);
 
-  const fetchSchedulerStatus = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/scheduler/status`);
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail);
-      setSchedulerStatus(data);
-    } catch (err) {
-      console.error('Error fetching scheduler status:', err);
+  // Enhanced API call wrapper
+  const fetchWithRetry = useCallback(async (url, options = {}, retries = 3) => {
+    let attempt = 0;
+
+    while (attempt < retries) {
+      try {
+        abortControllerRef.current = new AbortController();
+        const signal = abortControllerRef.current.signal;
+
+        const response = await fetch(url, {
+          ...options,
+          signal,
+          headers: {
+            'Content-Type': 'application/json',
+            ...options.headers
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+
+        return await response.json();
+      } catch (err) {
+        attempt++;
+        if (err.name === 'AbortError' || attempt === retries) {
+          throw err;
+        }
+        await new Promise(resolve => {
+          retryTimeoutRef.current = setTimeout(resolve, Math.pow(2, attempt) * 1000);
+        });
+      }
     }
-  };
+  }, []);
 
-  const fetchLatestAnalyses = async () => {
+  const cancelPendingRequests = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+    }
+  }, []);
+
+  const fetchWithLoadingState = useCallback(async (fetchFn) => {
     try {
       setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/analyses/latest`);
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail);
-      setLatestAnalyses(data);
+      setError(null);
+      await fetchFn();
     } catch (err) {
-      setError(err.message);
+      if (err.name !== 'AbortError') {
+        setError(err.message);
+      }
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const fetchAvailableDates = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/analyses/dates`);
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail);
-      setAvailableDates(data);
-    } catch (err) {
-      setError(err.message);
-    }
-  };
+  const fetchInitialStatus = useCallback(async () => {
+    const data = await fetchWithRetry(`${API_BASE_URL}/scheduler/initial-check`);
+    setNextUpdate(data.message);
+    setIsInitializing(false);
+  }, [fetchWithRetry]);
 
-  const fetchAnalysesByDate = async (date) => {
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/analyses/${date}`);
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail);
-      setDateAnalyses(data);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const fetchSchedulerStatus = useCallback(async () => {
+    const data = await fetchWithRetry(`${API_BASE_URL}/scheduler/status`);
+    setSchedulerStatus(data);
+  }, [fetchWithRetry]);
 
-  const fetchStats = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/analyses/stats/summary`);
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail);
-      setStats(data);
-    } catch (err) {
-      setError(err.message);
-    }
-  };
+  const fetchLatestAnalyses = useCallback(async () => {
+    const data = await fetchWithRetry(`${API_BASE_URL}/analyses/latest`);
+    setLatestAnalyses(data);
+  }, [fetchWithRetry]);
+
+  const fetchAvailableDates = useCallback(async () => {
+    const data = await fetchWithRetry(`${API_BASE_URL}/analyses/dates`);
+    setAvailableDates(data);
+  }, [fetchWithRetry]);
+
+  const fetchAnalysesByDate = useCallback(async (date) => {
+    const data = await fetchWithRetry(`${API_BASE_URL}/analyses/${date}`);
+    setDateAnalyses(data);
+  }, [fetchWithRetry]);
+
+  const fetchStats = useCallback(async () => {
+    const data = await fetchWithRetry(`${API_BASE_URL}/analyses/stats/summary`);
+    setStats(data);
+  }, [fetchWithRetry]);
+
+  // Keep-alive effect
+  useEffect(() => {
+    pingServer(); // Initial ping
+    pingIntervalRef.current = setInterval(pingServer, PING_INTERVAL);
+
+    return () => {
+      if (pingIntervalRef.current) {
+        clearInterval(pingIntervalRef.current);
+      }
+    };
+  }, [pingServer]);
+
+  // Initialize app data
+  useEffect(() => {
+    const initializeApp = async () => {
+      await fetchWithLoadingState(async () => {
+        await Promise.all([
+          fetchInitialStatus(),
+          fetchLatestAnalyses(),
+          fetchAvailableDates(),
+          fetchStats(),
+          fetchSchedulerStatus()
+        ]);
+      });
+
+      statusIntervalRef.current = setInterval(() => {
+        fetchSchedulerStatus().catch(console.error);
+      }, 60000);
+    };
+
+    initializeApp();
+
+    return () => {
+      cancelPendingRequests();
+      if (statusIntervalRef.current) {
+        clearInterval(statusIntervalRef.current);
+      }
+      if (pingIntervalRef.current) {
+        clearInterval(pingIntervalRef.current);
+      }
+    };
+  }, [fetchInitialStatus, fetchLatestAnalyses, fetchAvailableDates, fetchStats, fetchSchedulerStatus, fetchWithLoadingState, cancelPendingRequests]);
 
   const submitQuery = async (e) => {
     e.preventDefault();
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/query`, {
+    await fetchWithLoadingState(async () => {
+      const data = await fetchWithRetry(`${API_BASE_URL}/query`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({ text: query }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail);
       setQueryResponse(data);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+    });
   };
 
   const triggerManualUpdate = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/update-analyses`, {
+    await fetchWithLoadingState(async () => {
+      await fetchWithRetry(`${API_BASE_URL}/update-analyses`, {
         method: 'POST',
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail);
-      alert('Update triggered successfully!');
-      await fetchLatestAnalyses();
-      await fetchAvailableDates();
-      await fetchStats();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+      await Promise.all([
+        fetchLatestAnalyses(),
+        fetchAvailableDates(),
+        fetchStats()
+      ]);
+    });
   };
 
-  const renderAnalysis = (analysis) => {
+  const renderAnalysis = useCallback((analysis) => {
     if (!analysis) return null;
 
-    // Convert markdown-style text to HTML
     const formattedText = analysis
       .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
       .replace(/\n/g, '<br />');
@@ -207,7 +258,15 @@ function App() {
         </Card.Body>
       </Card>
     );
-  };
+  }, []);
+
+  if (isInitializing) {
+    return (
+      <div className="d-flex justify-content-center align-items-center" style={{ height: '100vh' }}>
+        <Spinner animation="border" />
+      </div>
+    );
+  }
 
   return (
     <div style={styles.container}>
@@ -291,7 +350,9 @@ function App() {
                 className="mb-3"
                 onChange={(e) => {
                   setSelectedDate(e.target.value);
-                  fetchAnalysesByDate(e.target.value);
+                  if (e.target.value) {
+                    fetchWithLoadingState(() => fetchAnalysesByDate(e.target.value));
+                  }
                 }}
               >
                 <option value="">Select a date...</option>
@@ -347,7 +408,7 @@ function App() {
                           <Button
                             variant="outline-primary"
                             size="sm"
-                            onClick={fetchSchedulerStatus}
+                            onClick={() => fetchWithLoadingState(fetchSchedulerStatus)}
                           >
                             Refresh Status
                           </Button>
@@ -365,46 +426,46 @@ function App() {
                           {schedulerStatus.jobs.map(job => (
                             <ListGroup.Item key={job.id}>
                               <div className="d-flex justify-content-between align-items-center">
-                              <div>
-                                <strong>{job.name}</strong>
-                                <div className="text-muted small">ID: {job.id}</div>
-                                <div>Next Run: {job.next_run ? new Date(job.next_run).toLocaleString() : 'Not scheduled'}</div>
+                                <div>
+                                  <strong>{job.name}</strong>
+                                  <div className="text-muted small">ID: {job.id}</div>
+                                  <div>Next Run: {job.next_run ? new Date(job.next_run).toLocaleString() : 'Not scheduled'}</div>
+                                </div>
+                                <Badge bg={job.pending ? 'warning' : 'success'}>
+                                  {job.pending ? 'Pending' : 'Ready'}
+                                </Badge>
                               </div>
-                              <Badge bg={job.pending ? 'warning' : 'success'}>
-                                {job.pending ? 'Pending' : 'Ready'}
-                              </Badge>
-                            </div>
-                          </ListGroup.Item>
-                        ))}
-                      </ListGroup>
-                    </Card.Body>
-                  </Card>
-                )}
+                            </ListGroup.Item>
+                          ))}
+                        </ListGroup>
+                      </Card.Body>
+                    </Card>
+                  )}
+                </div>
               </div>
-            </div>
 
-            <Button
-              variant="primary"
-              onClick={triggerManualUpdate}
-              className="mt-4"
-              disabled={loading}
-              style={styles.submitButton}
-            >
-              {loading ? (
-                <>
-                  <Spinner size="sm" className="me-2" />
-                  Updating...
-                </>
-              ) : (
-                'Trigger Manual Update'
-              )}
-            </Button>
-          </div>
-        </Tab>
-      </Tabs>
-    </Container>
-  </div>
-);
+              <Button
+                variant="primary"
+                onClick={() => fetchWithLoadingState(triggerManualUpdate)}
+                className="mt-4"
+                disabled={loading}
+                style={styles.submitButton}
+              >
+                {loading ? (
+                  <>
+                    <Spinner size="sm" className="me-2" />
+                    Updating...
+                  </>
+                ) : (
+                  'Trigger Manual Update'
+                )}
+              </Button>
+            </div>
+          </Tab>
+        </Tabs>
+      </Container>
+    </div>
+  );
 }
 
 export default App;
