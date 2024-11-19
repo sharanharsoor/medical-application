@@ -10,10 +10,6 @@ An AI-powered medical research analysis tool that provides daily updates on medi
 - MongoDB integration for data persistence
 - Scheduled updates with automated reminders
 
-## Live Demo
-Frontend: [URL will be here]
-API: [URL will be here]
-
 ## Tech Stack
 - Backend: FastAPI, MongoDB, LangChain, Google Gemini
 - Frontend: React, React Bootstrap
